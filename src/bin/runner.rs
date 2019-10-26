@@ -7,8 +7,9 @@ fn main() {
 //	config.create_restic_repo().unwrap();
 	let backup_tar = BackupTarget {
 		exclusions: Vec::new(),
-		folders: vec!["./src".into()]
+		folders: vec!["./src".into()],
+		tags: Vec::new()
 	};
-	config.restic_backup(&backup_tar);
-	config.get_restic_snapshots().unwrap();
+//	config.restic_backup(&backup_tar);
+	config.restic_ls("0d9613ea").unwrap();
 }

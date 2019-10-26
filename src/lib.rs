@@ -1,8 +1,10 @@
 #![recursion_limit = "1024"]
 
 mod errors;
+mod restic_outputs;
 
 use errors::*;
+use restic_outputs::*;
 use std::process::Command;
 use std::path::PathBuf;
 use std::ffi::OsStr;
@@ -87,29 +89,56 @@ impl ResticConfig {
 		}
 	}
 
-	pub fn get_restic_snapshots(&self) -> Result<Vec<String>> {
+	pub fn get_restic_snapshots(&self) -> Result<Vec<SnapshotsJson>> {
 		let mut cmd = self.cmd_setup();
 		cmd.arg("--json");
 		cmd.arg("snapshots");
 
-		let out: std::process::Output = cmd.output().chain_err(|| "Failed to list snapshots")?;
-		println!("Snapshot Out: {:?}", out);
-
-		Ok(Vec::new())
+		Self::output_parsing(cmd.output().chain_err(|| "Failed to start restic")?, |stdout_data| {
+			println!("\n{}\n", stdout_data);
+			let val: Vec<SnapshotsJson> = serde_json::from_str(&stdout_data)
+				.chain_err(|| "Failed to parse snapshots JSON, version not compatible?")?;
+			Ok(val)
+		})
 	}
 
-	pub fn restic_backup(&self, backup_targets: &BackupTarget) -> Result<()>{
+	pub fn restic_ls(&self, id: &str) -> Result<Vec<ListJson>> {
+		let mut cmd = self.cmd_setup();
+		cmd.arg("--json");
+		cmd.arg("ls").arg(id);
+
+		if !check_string_is_hex(id.trim()) {
+			return Err(ErrorKind::InvalidId.into());
+		}
+
+		Self::output_parsing(cmd.output().chain_err(|| "Failed to start restic")?, |stdout_data| {
+			let mut lines = stdout_data.lines().into_iter();
+			let description_line = lines.next().ok_or(ErrorKind::Msg("No output from restic for ls".to_owned()))?;
+			let val: SnapshotsJson = serde_json::from_str(description_line)
+				.chain_err(|| "Failed to parse ls JSON, version not compatible?")?;
+
+			lines.map(|line|
+				serde_json::from_str(line)
+					.chain_err(|| "Failed to parse ls JSON, version not compatible?")
+			).collect()
+		})
+	}
+
+	pub fn restic_backup(&self, backup_targets: &BackupTarget) -> Result<()> {
 		let mut cmd = self.cmd_setup();
 		cmd.arg("--json");
 		cmd.arg("backup");
+
+		for tag in &backup_targets.tags {
+			cmd.arg("--tag").arg(tag);
+		}
 
 		for folder in &backup_targets.folders {
 			cmd.arg(folder);
 		}
 
 		for exclusion in &backup_targets.exclusions {
-			cmd.arg("--exclude");
-			cmd.arg(exclusion);
+			cmd.arg("--exclude").arg(exclusion);
 		}
 
 		let out: std::process::Output = cmd.output().chain_err(|| "Failed to backup")?;
@@ -118,12 +147,37 @@ impl ResticConfig {
 
 		Ok(())
 	}
+
+	fn output_parsing<T, F: FnOnce(std::borrow::Cow<str>) -> Result<T>>(output: std::process::Output, success_handler: F) -> Result<T> {
+		if output.status.success() {
+			success_handler(String::from_utf8_lossy(&output.stdout))
+		} else {
+			let error_msg = String::from_utf8_lossy(&output.stderr);
+			if error_msg.contains("wrong password") {
+				Err(ErrorKind::ResticRepoInvalidPassword.into())
+			} else {
+				Err(ErrorKind::Msg(format!("Output failed failed for unknown reasons: {}", error_msg)).into())
+			}
+		}
+	}
+}
+
+fn check_string_is_hex(input: &str) -> bool {
+	for c in input.chars() {
+		match c {
+			'0'..='9' | 'a'..='f' => (),
+			_ => return false,
+		}
+	}
+
+	true
 }
 
 #[derive(Debug, Clone)]
 pub struct BackupTarget {
 	pub folders: Vec<PathBuf>,
 	pub exclusions: Vec<String>,
+	pub tags: Vec<String>,
 }
 
 #[cfg(test)]

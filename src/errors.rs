@@ -12,6 +12,10 @@ error_chain!{
 			description("Restic repository is not decrypted with this password")
 			display("Restic repository is not decrypted with this password")
 		}
+		InvalidId {
+			description("The input id does not contain all hex characters")
+			display("The input id does not contain all hex characters")
+		}
 	}
 }
 //
