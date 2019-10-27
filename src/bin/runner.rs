@@ -10,6 +10,8 @@ fn main() {
 		folders: vec!["./src".into()],
 		tags: Vec::new()
 	};
-//	config.restic_backup(&backup_tar);
-	config.restic_ls("0d9613ea").unwrap();
+//	config.restic_backup(&backup_tar).unwrap();
+	config.backup_dry_run_simulator(&backup_tar).unwrap();
+//	let stuff  = config.restic_ls("0d9613ea").unwrap();
+//	dbg!(stuff);
 }

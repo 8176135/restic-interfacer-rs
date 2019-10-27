@@ -16,6 +16,10 @@ error_chain!{
 			description("The input id does not contain all hex characters")
 			display("The input id does not contain all hex characters")
 		}
+		NoOutputFromRestic {
+			description("Restic output does not contain any output?")
+			display("Restic output does not contain any output?")
+		}
 	}
 }
 //

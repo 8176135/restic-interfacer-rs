@@ -6,7 +6,7 @@ mod restic_outputs;
 use errors::*;
 use restic_outputs::*;
 use std::process::Command;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::ffi::OsStr;
 
 const RESTIC_COMMAND: &str = "restic";
@@ -113,7 +113,7 @@ impl ResticConfig {
 
 		Self::output_parsing(cmd.output().chain_err(|| "Failed to start restic")?, |stdout_data| {
 			let mut lines = stdout_data.lines().into_iter();
-			let description_line = lines.next().ok_or(ErrorKind::Msg("No output from restic for ls".to_owned()))?;
+			let description_line = lines.next().ok_or::<Error>(ErrorKind::NoOutputFromRestic.into())?;
 			let val: SnapshotsJson = serde_json::from_str(description_line)
 				.chain_err(|| "Failed to parse ls JSON, version not compatible?")?;
 
@@ -124,7 +124,7 @@ impl ResticConfig {
 		})
 	}
 
-	pub fn restic_backup(&self, backup_targets: &BackupTarget) -> Result<()> {
+	pub fn restic_backup(&self, backup_targets: &BackupTarget) -> Result<BackupJson> {
 		let mut cmd = self.cmd_setup();
 		cmd.arg("--json");
 		cmd.arg("backup");
@@ -141,12 +141,23 @@ impl ResticConfig {
 			cmd.arg("--exclude").arg(exclusion);
 		}
 
-		let out: std::process::Output = cmd.output().chain_err(|| "Failed to backup")?;
+		Self::output_parsing(cmd.output().chain_err(|| "Failed to launch restic for backup")?, |stdout_data| {
+			let mut lines = stdout_data.lines();
+			let mut val: BackupJson;
+			while {
+				let result_line = lines.next_back().ok_or::<Error>(ErrorKind::NoOutputFromRestic.into())?;
+				val = serde_json::from_str(result_line).chain_err(|| format!("Failed to parse backup JSON, version not compatible? Out: {}", result_line))?;
+				match val {
+					BackupJson::Status { .. } => true,
+					BackupJson::Summary { .. } => false,
+				}
+			} {}
 
-		println!("Backup Out: {:?}", out);
-
-		Ok(())
+			Ok(val)
+		})
 	}
+
+	pub fn check_if_file_is_inc_in_backup<P: AsRef<Path>>(&self, file_path: P, backup_targets: &BackupTarget) -> Result<()> {}
 
 	fn output_parsing<T, F: FnOnce(std::borrow::Cow<str>) -> Result<T>>(output: std::process::Output, success_handler: F) -> Result<T> {
 		if output.status.success() {
@@ -175,9 +186,26 @@ fn check_string_is_hex(input: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct BackupTarget {
-	pub folders: Vec<PathBuf>,
-	pub exclusions: Vec<String>,
-	pub tags: Vec<String>,
+	folders: Vec<PathBuf>,
+	exclusions: Vec<String>,
+	tags: Vec<String>,
+}
+
+impl BackupTarget {
+	pub fn new<P: AsRef<Path>>(folders: &[P], exclusions: Vec<String>, tags: Vec<String>) -> Self {
+		Self {
+			folders: folders.iter().map(|c|
+			c.as_ref().canonicalize().expect("Failed to canonicalize path, not sure when this happens"))
+				.collect(),
+			tags,
+			exclusions,
+		}
+	}
+
+	pub fn add_folder<P: AsRef<Path>>(&mut self,folder_path: P) {
+		self.folders.push(folder_path.as_ref().canonicalize()
+			.expect("Failed to canonicalize path, not sure when this happens"))
+	}
 }
 
 #[cfg(test)]
