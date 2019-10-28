@@ -8,6 +8,8 @@ use restic_outputs::*;
 use std::process::Command;
 use std::path::{PathBuf, Path};
 use std::ffi::OsStr;
+use std::collections::HashSet;
+use globset::{Glob, GlobSet, GlobSetBuilder};
 
 const RESTIC_COMMAND: &str = "restic";
 const RESTIC_PASSWORD_ENV: &str = "RESTIC_PASSWORD";
@@ -138,7 +140,7 @@ impl ResticConfig {
 		}
 
 		for exclusion in &backup_targets.exclusions {
-			cmd.arg("--exclude").arg(exclusion);
+			cmd.arg("--exclude").arg(exclusion.glob());
 		}
 
 		Self::output_parsing(cmd.output().chain_err(|| "Failed to launch restic for backup")?, |stdout_data| {
@@ -157,7 +159,24 @@ impl ResticConfig {
 		})
 	}
 
-	pub fn check_if_file_is_inc_in_backup<P: AsRef<Path>>(&self, file_path: P, backup_targets: &BackupTarget) -> Result<()> {}
+	pub fn generate_files_for_backup_target<P: AsRef<Path>>(&self, backup_targets: &BackupTarget) -> Result<filepath_tree::PathStore> {
+		let mut store = filepath_tree::PathStore::new();
+		let ex_set = backup_targets.get_exclusions_as_globset();
+
+		for folder in &backup_targets.folders {
+			let walk = walkdir::WalkDir::new(&folder).follow_links(false).into_iter()
+				.filter_entry(|c| ex_set.is_match(c.path()));
+
+			for entry in walk {
+				dbg!(entry);
+//				let entry: walkdir::DirEntry = entry.chain_err(|| "Error reading")?;
+//
+//				store.add_path(entry.path().canonicalize()).chain_err(|| "Error adding path");
+			}
+		}
+
+		Ok(filepath_tree::PathStore::new())
+	}
 
 	fn output_parsing<T, F: FnOnce(std::borrow::Cow<str>) -> Result<T>>(output: std::process::Output, success_handler: F) -> Result<T> {
 		if output.status.success() {
@@ -187,22 +206,34 @@ fn check_string_is_hex(input: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct BackupTarget {
 	folders: Vec<PathBuf>,
-	exclusions: Vec<String>,
+	exclusions: Vec<Glob>,
 	tags: Vec<String>,
 }
 
 impl BackupTarget {
-	pub fn new<P: AsRef<Path>>(folders: &[P], exclusions: Vec<String>, tags: Vec<String>) -> Self {
+	pub fn new<P: AsRef<Path>>(folders: &[P], exclusions: Vec<Glob>, tags: Vec<String>) -> Self {
 		Self {
 			folders: folders.iter().map(|c|
-			c.as_ref().canonicalize().expect("Failed to canonicalize path, not sure when this happens"))
+				c.as_ref().canonicalize().expect("Failed to canonicalize path, not sure when this happens"))
 				.collect(),
 			tags,
 			exclusions,
 		}
 	}
 
-	pub fn add_folder<P: AsRef<Path>>(&mut self,folder_path: P) {
+	pub fn new_from_string<P: AsRef<Path>>(folders: &[P], exclusions: Vec<String>, tags: Vec<String>) -> std::result::Result<Self, globset::Error> {
+		Ok(Self::new(folders, tags.iter().map(|c| Glob::new(c)).collect::<std::result::Result<Vec<Glob>, globset::Error>>()?, tags))
+	}
+
+	pub fn get_exclusions_as_globset(&self) -> GlobSet {
+		let mut builder = GlobSetBuilder::new();
+		for exclusion in &self.exclusions {
+			builder.add(exclusion.clone());
+		}
+		builder.build().unwrap()
+	}
+
+	pub fn add_folder<P: AsRef<Path>>(&mut self, folder_path: P) {
 		self.folders.push(folder_path.as_ref().canonicalize()
 			.expect("Failed to canonicalize path, not sure when this happens"))
 	}

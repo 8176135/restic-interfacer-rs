@@ -10,4 +10,6 @@ edition = "2018"
 error-chain = "*"
 serde = {features = ["derive"], version = "*"}
 serde_json = "*"
-glob = "*"
+globset = "*"
+filepath-tree = {path = "../filepath-tree/"}
+walkdir = "*"
