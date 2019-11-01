@@ -1,10 +1,10 @@
 extern crate restic_interfacer;
 
 use restic_interfacer::{BackupTarget, ResticStorageConfig};
-use std::path::PathBuf;
+
 
 fn main() {
-    let config = restic_interfacer::ResticConfig::new(
+    let _config = restic_interfacer::ResticConfig::new(
         "1234".into(),
         ResticStorageConfig::Local("./sample_repo".into()),
     );

@@ -2,11 +2,14 @@
 
 mod errors;
 mod restic_outputs;
+mod backup_target;
 
 use errors::*;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use restic_outputs::*;
-use std::collections::HashSet;
+pub use backup_target::*;
+use serde::{Deserialize, Serialize, Serializer, Deserializer};
+
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,7 +22,7 @@ pub trait CreateRepoPath {
     fn create_path_string(&self) -> Box<dyn AsRef<OsStr>>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResticStorageConfig {
     Local(PathBuf),
     B2(B2Config),
@@ -34,7 +37,7 @@ impl CreateRepoPath for ResticStorageConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct B2Config {
     bucket_name: String,
     repo_path: String,
@@ -46,7 +49,7 @@ impl CreateRepoPath for B2Config {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ResticConfig {
     repo_password: String,
     repo_path: ResticStorageConfig,
@@ -129,7 +132,7 @@ impl ResticConfig {
                 let description_line = lines
                     .next()
                     .ok_or::<Error>(ErrorKind::NoOutputFromRestic.into())?;
-                let val: SnapshotsJson = serde_json::from_str(description_line)
+                let _val: SnapshotsJson = serde_json::from_str(description_line)
                     .chain_err(|| "Failed to parse ls JSON, version not compatible?")?;
 
                 lines
@@ -222,124 +225,7 @@ fn check_string_is_hex(input: &str) -> bool {
     true
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum BackupFileSelectionType {
-    NotATarget,
-    Included,
-    Excluded,
-}
 
-#[derive(Debug, Clone)]
-pub struct BackupTarget {
-    folders: Vec<PathBuf>,
-    exclusions: Vec<Glob>,
-    tags: Vec<String>,
-}
-
-impl BackupTarget {
-    pub fn new<P: AsRef<Path>>(folders: &[P], exclusions: Vec<Glob>, tags: Vec<String>) -> Self {
-        Self {
-            folders: folders
-                .iter()
-                .map(|c| {
-                    c.as_ref()
-                        .canonicalize()
-                        .expect("Failed to canonicalize path, path does not exist most likely")
-                })
-                .collect(),
-            tags,
-            exclusions,
-        }
-    }
-
-    pub fn new_from_string<P: AsRef<Path>>(
-        folders: &[P],
-        exclusions: Vec<String>,
-        tags: Vec<String>,
-    ) -> std::result::Result<Self, globset::Error> {
-        Ok(Self::new(
-            folders,
-            exclusions
-                .iter()
-                .map(|c| Glob::new(&format!("**/{}", c)))
-                .collect::<std::result::Result<Vec<Glob>, globset::Error>>()?,
-            tags,
-        ))
-    }
-
-    pub fn get_exclusions_as_globset(&self) -> GlobSet {
-        let mut builder = GlobSetBuilder::new();
-        for exclusion in &self.exclusions {
-            builder.add(exclusion.clone());
-        }
-        builder.build().unwrap()
-    }
-
-    pub fn add_folder<P: AsRef<Path>>(&mut self, folder_path: P) {
-        self.folders.push(
-            folder_path
-                .as_ref()
-                .canonicalize()
-                .expect("Failed to canonicalize path, not sure when this happens"),
-        )
-    }
-
-    pub fn check_path_is_in_backup<P: AsRef<Path>>(&self, path: P) -> BackupFileSelectionType {
-        if self
-            .folders
-            .iter()
-            .find(|c| {
-                path.as_ref()
-                    .canonicalize()
-                    .unwrap()
-                    .starts_with(c.as_path())
-            })
-            .is_some()
-        {
-            let ex_set = self.get_exclusions_as_globset();
-
-            if path.as_ref().ancestors().any(|c| ex_set.is_match(c)) {
-                BackupFileSelectionType::Excluded
-            } else {
-                BackupFileSelectionType::Included
-            }
-        } else {
-            BackupFileSelectionType::NotATarget
-        }
-    }
-    pub fn generate_files(&self) -> filepath_tree::PathStore<()> {
-        let mut store = filepath_tree::PathStore::new(None);
-        let ex_set = self.get_exclusions_as_globset();
-
-        for folder in &self.folders {
-            let mut walk = walkdir::WalkDir::new(&folder)
-                .follow_links(false)
-                .into_iter();
-
-            while let Some(entry) = walk.next() {
-                let entry = match entry {
-                    Ok(c) => c,
-                    Err(err) => {
-                        eprintln!("Error while walking: {}", err);
-                        continue;
-                    }
-                };
-
-                if ex_set.is_match(entry.path()) {
-                    println!("Excluded path found: {}", entry.path().display());
-                    walk.skip_current_dir();
-                    continue;
-                }
-                store
-                    .add_path(entry.path(), None)
-                    .expect("Failed to add to store");
-                //				dbg!(&entry);
-            }
-        }
-
-        store
-    }
-}
 
 #[cfg(test)]
 mod tests {
