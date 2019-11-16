@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::de::Visitor;
 use std::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MyGlob(Glob);
 
 impl Deref for MyGlob {
@@ -29,7 +29,7 @@ impl Serialize for MyGlob {
 		where
 			S: Serializer,
 	{
-		serializer.serialize_str(self.glob())
+		serializer.serialize_str(&self.glob()[3..])
 	}
 }
 
@@ -46,7 +46,13 @@ impl<'de> Visitor<'de> for MyGlobVisitor {
 		where
 			E: serde::de::Error,
 	{
-		Ok(MyGlob(Glob::new(value).map_err(|_| E::custom(format!("String not glob")))?))
+		let modded = if value.starts_with("/") {
+			value.trim_end_matches("/").to_owned()
+		} else {
+			"**/".to_owned() + value.trim_end_matches("/")
+		};
+
+		Ok(MyGlob(Glob::new(&modded).map_err(|_| E::custom(format!("String not glob")))?))
 	}
 }
 
@@ -59,7 +65,7 @@ impl<'de> Deserialize<'de> for MyGlob {
 	}
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
 pub struct BackupTarget {
 	pub folders: Vec<PathBuf>,
 	pub exclusions: Vec<MyGlob>,
@@ -78,7 +84,7 @@ impl BackupTarget {
 				})
 				.collect(),
 			tags,
-			exclusions: exclusions.into_iter().map(|c| MyGlob(c)).collect()
+			exclusions: exclusions.into_iter().map(|c| MyGlob(c)).collect(),
 		}
 	}
 
@@ -118,17 +124,18 @@ impl BackupTarget {
 		if self
 			.folders
 			.iter()
-			.find(|c| {
+			.any(|c| {
 				path.as_ref()
 					.canonicalize()
 					.unwrap()
 					.starts_with(c.as_path())
 			})
-			.is_some()
 		{
 			let ex_set = self.get_exclusions_as_globset();
 
-			if path.as_ref().ancestors().any(|c| ex_set.is_match(c)) {
+			if path.as_ref().ancestors().any(|c| {
+				ex_set.is_match(c)
+			}) {
 				BackupFileSelectionType::Excluded
 			} else {
 				BackupFileSelectionType::Included
@@ -136,12 +143,11 @@ impl BackupTarget {
 		} else if self
 			.folders
 			.iter()
-			.find(|c| {
+			.any(|c| {
 				c.canonicalize()
-					.unwrap()
-					.starts_with(path.as_ref())
-			})
-			.is_some() {
+					.map(|c| c.starts_with(path.as_ref()))
+					.unwrap_or(false)
+			}) {
 			BackupFileSelectionType::Contains
 		} else {
 			BackupFileSelectionType::Irreverent
@@ -173,10 +179,22 @@ impl BackupTarget {
 				store
 					.add_path(entry.path(), None)
 					.expect("Failed to add to store");
-				//				dbg!(&entry);
 			}
 		}
 
 		store
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn check_serialize_deserialize() {
+		let backup_tar =
+			BackupTarget::new_from_string(&vec!["/mnt/d/", "/mnt/c/Windows/"], vec!["system32".to_owned()], vec!["abc".to_owned()]).unwrap();
+		let out_tar: BackupTarget = serde_json::from_str(&serde_json::to_string(&backup_tar).unwrap()).unwrap();
+		assert_eq!(backup_tar, out_tar);
 	}
 }
